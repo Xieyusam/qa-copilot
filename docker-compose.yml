@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qa-copilot-backend
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+    volumes:
+      # Mount a local directory to persist database and vector store data
+      - ./docker_data:/app/data
+      # Optionally mount .env if you have specific keys (e.g. LLM_API_KEY)
+      # - ./backend/.env:/app/.env
+    environment:
+      - SQLITE_DB_PATH=/app/data/qa_copilot.db
+      - CHROMA_DB_PATH=/app/data/chroma_db
+      - UPLOAD_DIR=/app/data/uploads
+      # Set your API keys here or in a .env file
+      # - LLM_API_KEY=your_key_here
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: qa-copilot-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"  # Expose Nginx on port 5173 to match local dev experience
+    depends_on:
+      - backend
+
+volumes:
+  docker_data:
