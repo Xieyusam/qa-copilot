@@ -45,6 +45,70 @@ class CategoryWithCountResponse(CategoryResponse):
     document_count: int = 0
 
 
+# ========== 切分配置相关 Schemas ==========
+
+class ChunkingConfigBase(BaseModel):
+    """切分配置基础 Schema。"""
+    chunking_strategy: str = "recursive_text"
+    max_tokens: int = 512
+    overlap: int = 50
+    strategy_overrides: dict | None = None
+
+
+class ChunkingConfigUpdate(ChunkingConfigBase):
+    """更新切分配置请求 Schema。"""
+    pass
+
+
+class ChunkingConfigResponse(ChunkingConfigBase):
+    """切分配置响应 Schema。"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    category_id: str
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+# ========== 飞书文档相关 Schemas ==========
+
+class FeishuDocumentBase(BaseModel):
+    """飞书文档基础 Schema。"""
+    feishu_doc_url: str
+    feishu_doc_type: str | None = None  # "doc" | "sheet" | "bitable"，可选，API 将自动推断
+    title: str | None = None  # 可选，API 将自动获取
+    kb_category_id: str
+    is_active: bool = True
+    sync_interval_hours: int = 24
+
+
+class FeishuDocumentCreate(FeishuDocumentBase):
+    """创建飞书文档请求 Schema。"""
+    pass
+
+
+class FeishuDocumentUpdate(BaseModel):
+    """更新飞书文档请求 Schema。"""
+    feishu_doc_url: str | None = None
+    feishu_doc_type: str | None = None  # "doc" | "sheet" | "bitable"
+    title: str | None = None
+    kb_category_id: str | None = None
+    is_active: bool | None = None
+    sync_interval_hours: int | None = None
+
+
+class FeishuDocumentResponse(FeishuDocumentBase):
+    """飞书文档响应 Schema。"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    last_fetched_at: datetime | None = None
+    last_sync_status: str
+    last_sync_error: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
 # ========== 数据类（原有） ==========
 
 
@@ -97,6 +161,7 @@ class Message:
     content: str
     timestamp: datetime
     sources: list[SourceRef] | None = None
+    additional_kwargs: dict[str, Any] | None = None  # e.g., {"attachments": [...]}
 
 
 @dataclass

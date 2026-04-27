@@ -4,9 +4,14 @@ import { useDocumentStore } from '../stores/documents'
 import { useCategoryStore } from '../stores/categories'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { getDocumentChunks, getDocumentDownloadUrl, type DocumentChunk } from '../api/documents'
+import { syncFeishuDocument } from '../api/feishu'
 
 const props = defineProps<{
   filterCategoryId?: string
+}>()
+
+defineEmits<{
+  (e: 'refresh'): void
 }>()
 
 const store = useDocumentStore()
@@ -17,6 +22,18 @@ const selectedDoc = ref<{ id: string; filename: string } | null>(null)
 const chunks = ref<DocumentChunk[]>([])
 const chunksLoading = ref(false)
 const showChunksModal = ref(false)
+const syncingIds = ref(new Set<string>())
+
+async function handleSyncFeishuDoc(feishuDocId: string) {
+  syncingIds.value.add(feishuDocId)
+  try {
+    await syncFeishuDocument(feishuDocId)
+  } catch (e) {
+    console.error('Sync failed:', e)
+  } finally {
+    syncingIds.value.delete(feishuDocId)
+  }
+}
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '待处理',
@@ -35,7 +52,7 @@ const FILE_ICONS: Record<string, string> = {
 // 过滤后的文档列表
 const filteredDocuments = computed(() => {
   if (!props.filterCategoryId) return store.documents
-  return store.documents.filter(doc => doc.kbCategory === props.filterCategoryId)
+  return store.documents.filter(doc => doc.kbCategoryId === props.filterCategoryId)
 })
 
 function fileIcon(type: string) {
@@ -156,7 +173,7 @@ onMounted(async () => {
           <div class="card-meta">
             <span class="meta-item">
               <span class="meta-label">知识库</span>
-              <span class="meta-value">{{ getCategoryName(doc.kbCategory) }}</span>
+              <span class="meta-value">{{ getCategoryName(doc.kbCategoryId) }}</span>
             </span>
             <span class="meta-sep">·</span>
             <span class="meta-item">
@@ -181,6 +198,16 @@ onMounted(async () => {
         </div>
 
         <div class="card-right">
+          <span v-if="doc.feishuDocId" class="feishu-badge">飞书</span>
+          <button
+            v-if="doc.feishuDocId && !syncingIds.has(doc.feishuDocId)"
+            class="btn-sync"
+            @click="handleSyncFeishuDoc(doc.feishuDocId)"
+            title="手动同步"
+          >
+            🔄
+          </button>
+          <span v-else-if="doc.feishuDocId && syncingIds.has(doc.feishuDocId)" class="sync-spinner"></span>
           <span class="status-badge" :class="'status-' + doc.status">
             <span v-if="doc.status === 'processing'" class="status-spinner"></span>
             {{ STATUS_LABEL[doc.status] ?? doc.status }}
@@ -264,50 +291,10 @@ onMounted(async () => {
   min-height: 0;
 }
 
-.filter-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--spacing-3) var(--spacing-5);
-  margin-bottom: var(--spacing-3);
-  background: var(--color-bg);
-}
-
 .doc-count {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   font-weight: var(--font-weight-medium);
-}
-
-.filter-right {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-
-.filter-select {
-  width: 160px;
-}
-
-.btn-clear-filter {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg-hover);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.btn-clear-filter:hover {
-  background: var(--color-error-bg);
-  border-color: var(--color-error);
-  color: var(--color-error);
 }
 
 .empty-state {
@@ -418,6 +405,51 @@ onMounted(async () => {
 .status-processing { background: var(--color-primary-bg); color: var(--color-primary); }
 .status-ready      { background: var(--color-success-bg); color: var(--color-success); }
 .status-failed     { background: var(--color-error-bg); color: var(--color-error); }
+
+.feishu-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-1) var(--spacing-3);
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  flex-shrink: 0;
+}
+
+.btn-sync {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.btn-sync:hover {
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-light);
+}
+
+.sync-spinner {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-primary-light);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-md);
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
 
 .status-spinner {
   width: 10px;

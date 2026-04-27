@@ -16,7 +16,10 @@ const rawContent = ref('')
 const showSources = ref(false)
 const showToast = ref(false)
 const toastMessage = ref('')
-const feedbackType = ref<'positive' | 'negative' | null>(null)
+// 初始化反馈状态：从消息中读取已提交的反馈（只有 assistant 消息才有反馈）
+const feedbackType = ref<'positive' | 'negative' | null>(
+  props.message.role === 'assistant' ? (props.message.feedback_type ?? null) : null
+)
 const feedbackLoading = ref(false)
 
 // 流式渲染性能优化：使用 requestAnimationFrame 调度渲染
@@ -190,6 +193,12 @@ async function handleFeedback(type: 'positive' | 'negative') {
       <div class="bubble" :class="message.role">
         <!-- user: plain text; assistant: rendered markdown -->
         <p v-if="message.role === 'user'" class="content">{{ message.content }}</p>
+        <!-- 用户消息的附件标签 -->
+        <div v-if="message.role === 'user' && message.attachments?.length" class="attachments">
+          <span v-for="att in message.attachments" :key="att.id" class="file-tag">
+            📎 {{ att.filename }} ({{ (att.size / 1024).toFixed(1) }}KB)
+          </span>
+        </div>
         <div
           v-else
           class="markdown-body"
@@ -231,7 +240,7 @@ async function handleFeedback(type: 'positive' | 'negative') {
           class="action-btn feedback-btn"
           :class="{ active: feedbackType === 'positive' }"
           @click="handleFeedback('positive')"
-          :disabled="feedbackLoading || feedbackType !== null"
+          :disabled="feedbackLoading"
           title="点赞"
         >
           👍
@@ -240,7 +249,7 @@ async function handleFeedback(type: 'positive' | 'negative') {
           class="action-btn feedback-btn"
           :class="{ active: feedbackType === 'negative' }"
           @click="handleFeedback('negative')"
-          :disabled="feedbackLoading || feedbackType !== null"
+          :disabled="feedbackLoading"
           title="点踩"
         >
           👎
@@ -335,6 +344,25 @@ async function handleFeedback(type: 'positive' | 'negative') {
   white-space: pre-wrap;
   word-break: normal;
   overflow-wrap: normal;
+}
+
+/* 用户消息附件标签 */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+
+.file-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  background: rgba(255, 255, 255, 0.15);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: inherit;
 }
 
 /* Markdown styles */

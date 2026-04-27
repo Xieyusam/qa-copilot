@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from unittest.mock import MagicMock, AsyncMock
 
 from app.main import app
 from app.api.dependencies import get_current_user, require_admin, get_db as dep_get_db
@@ -11,6 +12,7 @@ from app.api.categories import get_db as cat_get_db
 from app.models import Base
 from app.models.user import User
 from app.models.kb_category import KbCategory
+from app.services.llm.llm_client import LLMClient
 
 
 # 创建独立测试数据库（内存 SQLite）
@@ -82,3 +84,18 @@ def override_auth():
 def client(override_auth):
     """创建已应用认证 override 的 TestClient（供其他测试模块使用）。"""
     return TestClient(app)
+
+
+@pytest.fixture
+def mock_feishu_client():
+    """Mock Feishu fetcher client for testing."""
+    from app.services.integrations.feishu_fetcher import BaseFeishuFetcher
+    return MagicMock(spec=BaseFeishuFetcher)
+
+
+@pytest.fixture
+def mock_llm_client():
+    """Mock LLM client for testing."""
+    mock = MagicMock(spec=LLMClient)
+    mock.chat = AsyncMock(return_value="摘要结果")
+    return mock

@@ -90,3 +90,49 @@ export async function moveDocumentCategory(docId: string, categoryId: string): P
     throw new Error(err.detail || '移动文档失败')
   }
 }
+
+/**
+ * 获取分类的分片策略配置
+ */
+export async function getChunkingConfig(categoryId: string): Promise<ChunkingConfig | null> {
+  const res = await request(`/api/admin/categories/${categoryId}/chunking-config`)
+  if (!res.ok) {
+    if (res.status === 404) return null
+    throw new Error('获取分片配置失败')
+  }
+  return res.json()
+}
+
+export interface ChunkingConfig {
+  id: string
+  category_id: string
+  chunking_strategy: string
+  max_tokens: number
+  overlap: number
+  strategy_overrides: Record<string, string> | null
+  created_at: string
+  updated_at: string | null
+}
+
+export interface ChunkingConfigUpdate {
+  chunking_strategy: string
+  max_tokens: number
+  overlap: number
+  strategy_overrides: Record<string, string> | null
+}
+
+/**
+ * 更新分类的分片策略配置
+ */
+export async function updateChunkingConfig(categoryId: string, data: ChunkingConfigUpdate): Promise<ChunkingConfig> {
+  const res = await request(`/api/admin/categories/${categoryId}/chunking-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '更新分片配置失败')
+  }
+  return res.json()
+}

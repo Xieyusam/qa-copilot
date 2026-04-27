@@ -5,6 +5,7 @@ import { useCategoryStore } from '../stores/categories'
 
 const props = defineProps<{
   open?: boolean
+  defaultCategoryId?: string
 }>()
 
 const emit = defineEmits<{
@@ -21,13 +22,17 @@ const selectedCategory = ref('')
 
 // 加载分类列表
 async function loadCategories() {
-  try {
-    await categoryStore.fetchCategories()
-    if (categoryStore.categories.length > 0 && !selectedCategory.value) {
-      selectedCategory.value = categoryStore.categories[0].id
+  if (categoryStore.categories.length === 0) {
+    try {
+      await categoryStore.fetchCategories()
+    } catch (e) {
+      console.error('Failed to load categories:', e)
     }
-  } catch (e) {
-    console.error('Failed to load categories:', e)
+  }
+  if (props.defaultCategoryId && selectedCategory.value !== props.defaultCategoryId) {
+    selectedCategory.value = props.defaultCategoryId
+  } else if (!props.defaultCategoryId && categoryStore.categories.length > 0 && !selectedCategory.value) {
+    selectedCategory.value = categoryStore.categories[0].id
   }
 }
 
@@ -37,7 +42,7 @@ function validate(file: File): string {
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
   const ACCEPTED = ['.pdf', '.docx', '.txt', '.md', '.xlsx', '.xls']
   if (!ACCEPTED.includes(ext)) return '不支持的格式'
-  if (file.size > 50 * 1024 * 1024) return '文件超过 50MB'
+  if (file.size > 100 * 1024 * 1024) return '文件超过 100MB'
   return ''
 }
 
@@ -145,7 +150,7 @@ const ACCEPTED_TEXT = '.pdf, .docx, .txt, .md, .xlsx'
 
             <div class="formats-info">
               <span>支持格式：{{ ACCEPTED_TEXT }}</span>
-              <span>最大 50MB</span>
+              <span>最大 100MB</span>
             </div>
           </div>
         </div>

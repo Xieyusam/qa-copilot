@@ -5,7 +5,6 @@ Prefix is set in main.py (e.g. /api/admin).
 from __future__ import annotations
 
 import json
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -15,8 +14,9 @@ from app.api.dependencies import require_admin
 from app.db.session import SessionLocal
 from app.models.trace import AgentTrace, TraceStep
 from app.models.feedback import ChatFeedback
+from app.services.observability.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -54,6 +54,7 @@ def list_traces(
                 {
                     "id": t.id,
                     "session_id": t.session_id,
+                    "message_index": t.message_index,
                     "question": t.question[:200] if t.question else None,  # Truncate
                     "final_answer": t.final_answer[:200] if t.final_answer else None,
                     "total_time_ms": round(t.total_time_ms, 2),
@@ -83,9 +84,11 @@ def get_trace_detail(trace_id: str, _: None = Depends(require_admin)):
         return {
             "id": trace.id,
             "session_id": trace.session_id,
+            "message_index": trace.message_index,
             "question": trace.question,
             "final_answer": trace.final_answer,
             "total_time_ms": round(trace.total_time_ms, 2),
+            "attachments_json": trace.attachments_json,
             "created_at": trace.created_at.isoformat() if trace.created_at else None,
             "steps": [
                 {
@@ -95,7 +98,9 @@ def get_trace_detail(trace_id: str, _: None = Depends(require_admin)):
                     "tool_name": s.tool_name,
                     "input_prompt": s.input_prompt,
                     "output_result": s.output_result,
+                    "start_time_ms": round(s.start_time_ms, 2),
                     "time_ms": round(s.time_ms, 2),
+                    "duration_ms": round(s.time_ms - s.start_time_ms, 2),
                     "created_at": s.created_at.isoformat() if s.created_at else None,
                 }
                 for s in sorted(trace.steps, key=lambda x: x.step_index)
@@ -121,9 +126,11 @@ def export_trace(trace_id: str, _: None = Depends(require_admin)):
         data = {
             "id": trace.id,
             "session_id": trace.session_id,
+            "message_index": trace.message_index,
             "question": trace.question,
             "final_answer": trace.final_answer,
             "total_time_ms": round(trace.total_time_ms, 2),
+            "attachments_json": trace.attachments_json,
             "created_at": trace.created_at.isoformat() if trace.created_at else None,
             "steps": [
                 {
@@ -133,7 +140,9 @@ def export_trace(trace_id: str, _: None = Depends(require_admin)):
                     "tool_name": s.tool_name,
                     "input_prompt": s.input_prompt,
                     "output_result": s.output_result,
+                    "start_time_ms": round(s.start_time_ms, 2),
                     "time_ms": round(s.time_ms, 2),
+                    "duration_ms": round(s.time_ms - s.start_time_ms, 2),
                     "created_at": s.created_at.isoformat() if s.created_at else None,
                 }
                 for s in sorted(trace.steps, key=lambda x: x.step_index)

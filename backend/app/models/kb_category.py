@@ -48,5 +48,19 @@ class KbCategory(Base):
     # 关联文档
     documents: Mapped[list["Document"]] = relationship(
         back_populates="kb_category_rel",
-        lazy="dynamic"
+        lazy="dynamic",
+        cascade="all, delete-orphan"  # 删除分类时级联删除文档
+    )
+
+    # 关联飞书文档 🔜 下个版本修复，暂时禁用
+    # feishu_documents: Mapped[list["FeishuDocument"]] = relationship(
+    #     back_populates="kb_category_rel",
+    #     lazy="dynamic"
+    # )
+
+    # 关联切分配置
+    chunking_config: Mapped["KbChunkingConfig"] = relationship(
+        back_populates="category",
+        uselist=False,
+        cascade="all, delete-orphan",
     )

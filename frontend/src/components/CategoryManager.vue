@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useCategoryStore } from '../stores/categories'
 import ConfirmDialog from './ConfirmDialog.vue'
 import type { Category } from '../api/categories'
@@ -24,6 +24,7 @@ function displayToast(msg: string) {
   }, 2500)
 }
 
+// 打开编辑弹窗（从模板调用）
 function openEditForm(category: Category) {
   editingCategory.value = category
   formName.value = category.name
@@ -32,13 +33,14 @@ function openEditForm(category: Category) {
 }
 
 function openCreateForm() {
+  editingCategory.value = null
   formName.value = ''
   formDescription.value = ''
   formError.value = ''
   showCreateForm.value = true
 }
 
-defineExpose({ openCreateForm })
+defineExpose({ openCreateForm, openEditForm })
 
 function closeForm() {
   showCreateForm.value = false
@@ -95,16 +97,13 @@ async function handleUpdate() {
   }
 }
 
-function askDelete(category: Category) {
-  deleteTarget.value = category
-}
-
 async function confirmDelete() {
   if (!deleteTarget.value) return
 
   try {
     await store.removeCategory(deleteTarget.value.id)
     displayToast('分类删除成功')
+    closeForm()
   } catch (e: any) {
     displayToast(e.message || '删除失败')
   } finally {
@@ -112,61 +111,14 @@ async function confirmDelete() {
   }
 }
 
-onMounted(async () => {
-  try {
-    await store.fetchCategories()
-  } catch (e) {
-    console.error('Failed to load categories:', e)
-  }
-})
+function askDelete() {
+  if (!editingCategory.value) return
+  deleteTarget.value = editingCategory.value
+}
 </script>
 
 <template>
   <div class="category-manager">
-    <!-- Category List -->
-    <div class="category-list">
-      <div
-        v-for="category in store.categories"
-        :key="category.id"
-        class="category-card"
-      >
-        <div class="category-info">
-          <div class="category-name">{{ category.name }}</div>
-          <div v-if="category.description" class="category-desc">{{ category.description }}</div>
-        </div>
-        <div class="category-meta">
-          <span class="doc-count">{{ category.document_count ?? 0 }} 个文档</span>
-        </div>
-        <div class="category-actions">
-          <button class="btn-icon" @click="openEditForm(category)" title="编辑">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-            </svg>
-          </button>
-          <button
-            class="btn-icon btn-delete"
-            :disabled="(category.document_count ?? 0) > 0"
-            :title="(category.document_count ?? 0) > 0 ? '该分类下有文档，无法删除' : '删除'"
-            @click="askDelete(category)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div v-if="store.categories.length === 0 && !store.loading" class="empty-state">
-        <div class="empty-icon">📁</div>
-        <p>暂无分类</p>
-      </div>
-
-      <div v-if="store.loading" class="loading-state">
-        <div class="spinner"></div>
-      </div>
-    </div>
-
     <!-- Create/Edit Modal -->
     <Teleport to="body">
       <div v-if="showCreateForm || editingCategory" class="modal-overlay" @click="closeForm">
@@ -192,22 +144,34 @@ onMounted(async () => {
                 v-model="formDescription"
                 class="form-input form-textarea"
                 placeholder="输入分类描述（可选）"
-                rows="3"
+                rows="2"
                 maxlength="200"
               ></textarea>
             </div>
+
             <p v-if="formError" class="form-error">{{ formError }}</p>
           </div>
           <div class="modal-footer">
-            <button class="btn-secondary" @click="closeForm">取消</button>
             <button
-              class="btn-primary"
+              v-if="editingCategory"
+              class="btn-danger"
               :disabled="formLoading"
-              @click="editingCategory ? handleUpdate() : handleCreate()"
+              @click="askDelete()"
             >
               <span v-if="formLoading" class="btn-spinner"></span>
-              <span v-else>{{ editingCategory ? '保存' : '创建' }}</span>
+              <span v-else>删除</span>
             </button>
+            <div class="footer-right">
+              <button class="btn-secondary" @click="closeForm">取消</button>
+              <button
+                class="btn-primary"
+                :disabled="formLoading"
+                @click="editingCategory ? handleUpdate() : handleCreate()"
+              >
+                <span v-if="formLoading" class="btn-spinner"></span>
+                <span v-else>{{ editingCategory ? '保存' : '创建' }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -237,136 +201,6 @@ onMounted(async () => {
 .category-manager {
   display: flex;
   flex-direction: column;
-  height: 100%;
-}
-
-.category-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--spacing-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-
-.category-card {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--spacing-4) var(--spacing-5);
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
-}
-
-.category-card:hover {
-  border-color: var(--color-border-dark);
-  box-shadow: var(--shadow-sm);
-}
-
-.category-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.category-name {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text);
-}
-
-.category-desc {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  margin-top: var(--spacing-1);
-}
-
-.category-meta {
-  margin: 0 var(--spacing-4);
-}
-
-.doc-count {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  background: var(--color-bg-hover);
-  padding: var(--spacing-1) var(--spacing-3);
-  border-radius: var(--radius-full);
-}
-
-.category-actions {
-  display: flex;
-  gap: var(--spacing-2);
-}
-
-.btn-icon {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.btn-icon:hover {
-  background: var(--color-primary-bg);
-  border-color: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-.btn-icon.btn-delete:hover:not(:disabled) {
-  background: var(--color-error-bg);
-  border-color: var(--color-error);
-  color: var(--color-error);
-}
-
-.btn-icon:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-15);
-  gap: var(--spacing-3);
-}
-
-.empty-icon { font-size: 40px; }
-
-.empty-state p {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.loading-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-8);
-  color: var(--color-text-muted);
-}
-
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  border-radius: var(--radius-full);
-  animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 /* Modal */
@@ -383,7 +217,7 @@ onMounted(async () => {
 .modal {
   background: var(--color-bg-card);
   border-radius: var(--radius-lg);
-  width: 400px;
+  width: 440px;
   max-width: 90vw;
   box-shadow: var(--shadow-lg);
 }
@@ -458,7 +292,16 @@ onMounted(async () => {
 
 .form-textarea {
   resize: vertical;
-  min-height: 80px;
+  min-height: 60px;
+}
+
+.form-row {
+  display: flex;
+  gap: var(--spacing-4);
+}
+
+.form-row .form-group {
+  flex: 1;
 }
 
 .form-error {
@@ -471,7 +314,13 @@ onMounted(async () => {
   padding: var(--spacing-4) var(--spacing-5);
   border-top: 1px solid var(--color-border);
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+.footer-right {
+  display: flex;
   gap: var(--spacing-3);
 }
 
@@ -515,6 +364,31 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 
+.btn-danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error-light);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-error);
+  cursor: pointer;
+  min-width: 80px;
+  transition: all var(--transition-fast);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-error);
+  color: var(--color-text-inverse);
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .btn-spinner {
   width: 16px;
   height: 16px;
@@ -522,6 +396,10 @@ onMounted(async () => {
   border-top-color: #fff;
   border-radius: var(--radius-full);
   animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Toast */

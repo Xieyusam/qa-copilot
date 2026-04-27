@@ -6,11 +6,20 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_admin
-from app.core.schemas import CategoryCreate, CategoryUpdate, CategoryResponse, CategoryWithCountResponse
+from app.core.schemas import (
+    CategoryCreate,
+    CategoryUpdate,
+    CategoryResponse,
+    CategoryWithCountResponse,
+    ChunkingConfigUpdate,
+    ChunkingConfigResponse,
+)
 from app.db.session import SessionLocal
 from app.models.kb_category import KbCategory
 from app.models.document import Document
 from app.models.user import User
+from app.models.chunking_config import KbChunkingConfig
+from app.services.document.chunking_config import ChunkingConfigService
 
 router = APIRouter(prefix="/api/admin/categories", tags=["categories"])
 
@@ -139,3 +148,55 @@ async def delete_category(
     db.commit()
 
     return {"message": "分类已删除"}
+
+
+@router.get("/{category_id}/chunking-config", response_model=ChunkingConfigResponse)
+async def get_chunking_config(
+    category_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """获取分类的切分配置（管理员专属）。"""
+    # 检查分类是否存在
+    category = db.get(KbCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="分类不存在")
+
+    service = ChunkingConfigService()
+    config = service.get_config(category_id)
+
+    return ChunkingConfigResponse(
+        id=config.id if hasattr(config, "id") else "",
+        category_id=category_id,
+        chunking_strategy=config.chunking_strategy,
+        max_tokens=config.max_tokens,
+        overlap=config.overlap,
+        strategy_overrides=config.strategy_overrides,
+        created_at=config.created_at if hasattr(config, "created_at") else category.created_at,
+        updated_at=config.updated_at if hasattr(config, "updated_at") else None,
+    )
+
+
+@router.put("/{category_id}/chunking-config", response_model=ChunkingConfigResponse)
+async def upsert_chunking_config(
+    category_id: str,
+    data: ChunkingConfigUpdate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """创建或更新分类的切分配置（管理员专属）。"""
+    # 检查分类是否存在
+    category = db.get(KbCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="分类不存在")
+
+    service = ChunkingConfigService()
+    config = service.upsert_config(
+        category_id=category_id,
+        strategy=data.chunking_strategy,
+        max_tokens=data.max_tokens,
+        overlap=data.overlap,
+        overrides=data.strategy_overrides,
+    )
+
+    return ChunkingConfigResponse.model_validate(config)

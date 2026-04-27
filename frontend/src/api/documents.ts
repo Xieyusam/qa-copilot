@@ -12,6 +12,8 @@ function toDocument(raw: Record<string, unknown>): Document {
     status: (raw.status as Document['status']),
     uploadedAt: (raw.uploaded_at ?? raw.uploadedAt) as string,
     kbCategory: (raw.kb_category ?? raw.kbCategory ?? 'default') as string,
+    kbCategoryId: (raw.kb_category_id ?? raw.kbCategoryId ?? '') as string,
+    feishuDocId: (raw.feishu_doc_id ?? raw.feishuDocId) as string | undefined,
   }
 }
 
@@ -19,11 +21,15 @@ export function uploadDocument(
   file: File,
   kbCategory: string = 'default',
   onProgress?: (pct: number) => void,
+  chunkingStrategy?: string,
 ): Promise<{ id: string; filename: string; status: string; kbCategory: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     const formData = new FormData()
     formData.append('file', file)
+    if (chunkingStrategy) {
+      formData.append('chunking_strategy', chunkingStrategy)
+    }
 
     if (onProgress) {
       xhr.upload.addEventListener('progress', (e) => {

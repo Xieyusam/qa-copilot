@@ -20,6 +20,8 @@ class Document(Base):
     error_msg: Mapped[str | None] = mapped_column(String, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # 软删除标记
+    feishu_doc_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # 关联的飞书文档 ID
 
     # 知识库分类（外键关联）
     kb_category_id: Mapped[str] = mapped_column(

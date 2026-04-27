@@ -72,15 +72,11 @@ async function openContextModal() {
   contextMessages.value = []
   try {
     const msgs = await getMessages(selectedTrace.value.session_id)
-    // Find the assistant message that contains the final_answer and show only messages before it
     const answerIndex = msgs.findIndex(
       m => m.role === 'assistant' && selectedTrace.value!.final_answer &&
            m.content && m.content.includes(selectedTrace.value!.final_answer)
     )
-    // Show messages up to (and including) the user message before the answer
     if (answerIndex > 0) {
-      // answerIndex is the assistant msg, so we show msgs[0] to msgs[answerIndex - 1]
-      // which is the user question and all prior messages
       contextMessages.value = msgs.slice(0, answerIndex)
     } else {
       contextMessages.value = msgs
@@ -108,8 +104,11 @@ function formatDuration(ms: number): string {
   return `${(ms / 60000).toFixed(2)}min`
 }
 
-function getTraceFeedback(sessionId: string): 'positive' | 'negative' | null {
-  // Match first feedback for this session (most relevant is the assistant answer)
+function getTraceFeedback(sessionId: string, messageIndex?: number): 'positive' | 'negative' | null {
+  if (messageIndex !== undefined) {
+    const fb = feedbacks.value.find(f => f.session_id === sessionId && f.message_index === messageIndex)
+    return fb ? (fb.feedback_type as 'positive' | 'negative') : null
+  }
   const fb = feedbacks.value.find(f => f.session_id === sessionId)
   return fb ? (fb.feedback_type as 'positive' | 'negative') : null
 }
@@ -144,9 +143,148 @@ const positiveRate = computed(() => {
   return (feedbacksStats.value.positive_count / feedbacksStats.value.total_count) * 100
 })
 
+const traceAttachments = computed(() => {
+  if (!selectedTrace.value?.attachments_json) return null
+  try {
+    return JSON.parse(selectedTrace.value.attachments_json)
+  } catch {
+    return null
+  }
+})
+
 function refreshData() {
   loadTraces()
   loadFeedbacks()
+}
+
+// Merge steps by node type for cleaner timeline display
+interface MergedStep {
+  id: string
+  step_type: string
+  label: string
+  start_time_ms: number
+  end_time_ms: number
+  duration_ms: number
+  isParallel: boolean
+  children: any[]
+}
+
+const mergedTimeline = computed(() => {
+  if (!selectedTrace.value?.steps || selectedTrace.value.steps.length === 0) return []
+
+  const steps = selectedTrace.value.steps
+  const totalTime = Math.max(...steps.map(s => s.time_ms))
+
+  // Group steps by their main node type
+  const nodeMap = new Map<string, MergedStep>()
+
+  steps.forEach((step, idx) => {
+    // Determine the main node type from step_type or tool_name
+    let nodeType = step.step_type
+    let label = step.step_type
+
+    // Map tool_call to their parent node
+    if (step.step_type === 'tool_call' && step.tool_name) {
+      // Try to determine parent from context (previous steps)
+      const prevStep = idx > 0 ? steps[idx - 1] : null
+      if (prevStep && prevStep.step_type !== 'tool_call') {
+        nodeType = prevStep.step_type
+        label = step.tool_name
+      } else {
+        label = step.tool_name
+      }
+    } else if (step.step_type === 'intent_detection') {
+      label = '意图分析'
+    } else if (step.step_type.includes('supervisor')) {
+      label = '协调决策'
+    } else if (step.step_type === 'decide') {
+      label = '路由决策'
+    } else if (step.step_type === 'aggregate') {
+      label = '结果汇总'
+    } else if (step.step_type.includes('search')) {
+      label = '知识检索'
+    } else if (step.step_type.includes('jira')) {
+      label = 'Jira查询'
+    } else if (step.step_type.includes('translate')) {
+      label = '翻译'
+    } else if (step.step_type.includes('log')) {
+      label = '日志分析'
+    } else if (step.step_type.includes('summarize')) {
+      label = '摘要'
+    }
+
+    // Calculate actual start and end times
+    const startMs = step.start_time_ms
+    const endMs = step.time_ms
+    const durationMs = step.duration_ms || (endMs - startMs)
+
+    // Check if parallel to previous (overlapping time)
+    const prevStep = idx > 0 ? steps[idx - 1] : null
+    const isParallel = prevStep ? startMs < prevStep.time_ms : false
+
+    // Use step_index as part of key to avoid overwriting
+    const key = `${nodeType}_${step.step_index}`
+
+    if (!nodeMap.has(key)) {
+      nodeMap.set(key, {
+        id: key,
+        step_type: nodeType,
+        label: label,
+        start_time_ms: startMs,
+        end_time_ms: endMs,
+        duration_ms: durationMs,
+        isParallel: isParallel,
+        children: [step]
+      })
+    } else {
+      // Merge: extend time range if needed
+      const existing = nodeMap.get(key)!
+      existing.start_time_ms = Math.min(existing.start_time_ms, startMs)
+      existing.end_time_ms = Math.max(existing.end_time_ms, endMs)
+      existing.duration_ms = existing.end_time_ms - existing.start_time_ms
+      existing.children.push(step)
+    }
+  })
+
+  // Sort by start time
+  const merged = Array.from(nodeMap.values()).sort((a, b) => a.start_time_ms - b.start_time_ms)
+
+  // Recalculate parallelism after merging
+  return merged.map((step, idx) => ({
+    ...step,
+    isParallel: idx > 0 && step.start_time_ms < merged[idx - 1].end_time_ms
+  }))
+})
+
+const totalTime = computed(() => {
+  if (!selectedTrace.value?.steps.length) return 0
+  return Math.max(...selectedTrace.value.steps.map(s => s.time_ms))
+})
+
+const timelineMarkers = computed(() => {
+  if (!totalTime.value) return []
+  const markers = []
+  const step = totalTime.value / 4
+  for (let i = 0; i <= 4; i++) {
+    const ms = step * i
+    markers.push({
+      pct: (ms / totalTime.value) * 100,
+      label: formatDuration(ms)
+    })
+  }
+  return markers
+})
+
+function getStepColor(stepType: string): string {
+  if (stepType.includes('intent')) return '#ec4899'      // pink - intent detection
+  if (stepType.includes('supervisor') || stepType.includes('decide')) return '#6366f1'  // indigo - supervisor
+  if (stepType.includes('search')) return '#10b981'       // emerald - search
+  if (stepType.includes('jira')) return '#f59e0b'        // amber - jira
+  if (stepType.includes('translate')) return '#8b5cf6'   // violet - translate
+  if (stepType.includes('log')) return '#06b6d4'         // cyan - log
+  if (stepType.includes('summarize')) return '#14b8a6'   // teal - summarize
+  if (stepType.includes('aggregate')) return '#f43f5e'   // rose - aggregate
+  return '#64748b'                                          // slate - default
 }
 
 onMounted(() => {
@@ -217,8 +355,8 @@ onMounted(() => {
           >
             <div class="trace-top">
               <div class="trace-question">{{ trace.question }}</div>
-              <div v-if="getTraceFeedback(trace.session_id)" class="trace-feedback" :class="getTraceFeedback(trace.session_id)">
-                {{ getTraceFeedback(trace.session_id) === 'positive' ? '👍' : '👎' }}
+              <div v-if="getTraceFeedback(trace.session_id, trace.message_index)" class="trace-feedback" :class="getTraceFeedback(trace.session_id, trace.message_index)">
+                {{ getTraceFeedback(trace.session_id, trace.message_index) === 'positive' ? '👍' : '👎' }}
               </div>
             </div>
             <div class="trace-info">
@@ -261,61 +399,138 @@ onMounted(() => {
                 💬 上下文
               </button>
               <button class="btn-export" @click="handleExportTrace(selectedTrace.id)">
-                📥 导出 JSON
+                📥 导出
               </button>
             </div>
           </div>
 
-          <div class="detail-section">
-            <h4>📝 用户问题</h4>
-            <p class="question-text">{{ selectedTrace.question }}</p>
-          </div>
-
-          <div class="detail-section">
-            <h4>💬 AI 回答</h4>
-            <p class="answer-text">{{ selectedTrace.final_answer || '（回答生成中或出错）' }}</p>
-          </div>
-
-          <div class="detail-stats">
-            <div class="stat-item">
-              <span class="stat-label">总耗时</span>
-              <span class="stat-value">{{ formatDuration(selectedTrace.total_time_ms) }}</span>
+          <!-- Question & Answer -->
+          <div class="qa-section">
+            <div class="qa-item">
+              <div class="qa-label">🙋 用户问题</div>
+              <div class="qa-content question">{{ selectedTrace.question }}</div>
             </div>
-            <div class="stat-item">
-              <span class="stat-label">执行步骤</span>
-              <span class="stat-value">{{ selectedTrace.steps.length }} 步</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">创建时间</span>
-              <span class="stat-value">{{ formatDate(selectedTrace.created_at) }}</span>
+            <div class="qa-item">
+              <div class="qa-label">🤖 AI 回答</div>
+              <div class="qa-content answer">{{ selectedTrace.final_answer || '（无）' }}</div>
             </div>
           </div>
 
-          <div class="detail-section">
-            <h4>🔄 执行步骤</h4>
-            <div class="steps-timeline">
-              <div v-for="step in selectedTrace.steps" :key="step.id" class="step-node">
-                <div class="step-marker">
-                  <span class="step-num">{{ step.step_index + 1 }}</span>
+          <!-- Attachments -->
+          <div v-if="traceAttachments" class="attachments-section">
+            <div class="section-label">📎 附件</div>
+            <div class="attachments-list">
+              <span v-for="att in traceAttachments" :key="att.id" class="file-tag">
+                {{ att.filename }} ({{ (att.size / 1024).toFixed(1) }}KB)
+              </span>
+            </div>
+          </div>
+
+          <!-- Stats -->
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-icon">⏱️</div>
+              <div class="stat-info">
+                <div class="stat-value">{{ formatDuration(selectedTrace.total_time_ms) }}</div>
+                <div class="stat-label">总耗时</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">🔧</div>
+              <div class="stat-info">
+                <div class="stat-value">{{ selectedTrace.steps.length }}</div>
+                <div class="stat-label">执行步骤</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">📅</div>
+              <div class="stat-info">
+                <div class="stat-value">{{ formatDate(selectedTrace.created_at) }}</div>
+                <div class="stat-label">创建时间</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Timeline -->
+          <div class="timeline-section">
+            <div class="section-label">📊 执行时间轴</div>
+
+            <div v-if="mergedTimeline.length" class="timeline-container">
+              <!-- Timeline header with markers -->
+              <div class="timeline-header">
+                <div
+                  v-for="marker in timelineMarkers"
+                  :key="marker.label"
+                  class="timeline-marker"
+                  :style="{ left: marker.pct + '%' }"
+                >
+                  <div class="marker-line"></div>
+                  <div class="marker-label">{{ marker.label }}</div>
                 </div>
-                <div class="step-card">
-                  <div class="step-header">
-                    <span class="step-type" :class="step.step_type">
-                      {{ step.step_type }}
+              </div>
+
+              <!-- Timeline rows -->
+              <div class="timeline-rows">
+                <div
+                  v-for="(step, idx) in mergedTimeline"
+                  :key="step.id"
+                  class="timeline-row"
+                >
+                  <div class="row-label">
+                    <span class="step-index">{{ idx + 1 }}</span>
+                    <span class="step-name" :style="{ color: getStepColor(step.step_type) }">
+                      {{ step.label }}
                     </span>
-                    <span v-if="step.tool_name" class="step-tool">🔧 {{ step.tool_name }}</span>
-                    <span class="step-duration">{{ formatDuration(step.time_ms) }}</span>
+                    <span v-if="step.isParallel" class="parallel-tag">并行</span>
                   </div>
-                  <div v-if="step.input_prompt" class="step-io">
-                    <span class="io-label">输入:</span>
-                    <pre>{{ step.input_prompt }}</pre>
-                  </div>
-                  <div v-if="step.output_result" class="step-io">
-                    <span class="io-label">输出:</span>
-                    <pre>{{ step.output_result }}</pre>
+                  <div class="row-bar-container">
+                    <div
+                      class="timeline-bar"
+                      :style="{
+                        left: (step.start_time_ms / totalTime * 100) + '%',
+                        width: Math.max((step.duration_ms / totalTime * 100), 2) + '%',
+                        backgroundColor: getStepColor(step.step_type)
+                      }"
+                      :title="`${step.label}: ${formatDuration(step.duration_ms)}`"
+                    >
+                      <span class="bar-duration">{{ formatDuration(step.duration_ms) }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
+            </div>
+
+            <!-- Step details accordion -->
+            <div class="steps-accordion">
+              <details
+                v-for="(step, idx) in selectedTrace.steps"
+                :key="step.id"
+                class="step-detail"
+              >
+                <summary class="step-summary">
+                  <span class="step-num">{{ idx + 1 }}</span>
+                  <span class="step-type" :style="{ backgroundColor: getStepColor(step.step_type) + '20', color: getStepColor(step.step_type) }">
+                    {{ step.step_type }}
+                  </span>
+                  <span v-if="step.tool_name" class="step-tool">{{ step.tool_name }}</span>
+                  <span class="step-dur">{{ formatDuration(step.duration_ms || (step.time_ms - step.start_time_ms)) }}</span>
+                  <span class="expand-icon">▶</span>
+                </summary>
+                <div class="step-body">
+                  <div v-if="step.input_prompt" class="step-io">
+                    <div class="io-label">📥 输入</div>
+                    <pre class="io-content">{{ step.input_prompt }}</pre>
+                  </div>
+                  <div v-if="step.output_result" class="step-io">
+                    <div class="io-label">📤 输出</div>
+                    <pre class="io-content">{{ step.output_result }}</pre>
+                  </div>
+                  <div class="step-meta">
+                    <span>开始: {{ formatDuration(step.start_time_ms) }}</span>
+                    <span>结束: {{ formatDuration(step.time_ms) }}</span>
+                  </div>
+                </div>
+              </details>
             </div>
           </div>
         </div>
@@ -329,7 +544,7 @@ onMounted(() => {
           <div class="modal-header">
             <h3>💬 对话上下文</h3>
             <div class="modal-header-actions">
-              <button class="btn-export-small" @click="exportContextJson">📥 导出 JSON</button>
+              <button class="btn-export-small" @click="exportContextJson">📥 导出</button>
               <button class="btn-close" @click="closeContextModal">&times;</button>
             </div>
           </div>
@@ -349,6 +564,11 @@ onMounted(() => {
               >
                 <div class="context-role">{{ msg.role === 'user' ? '👤 用户' : '🤖 AI' }}</div>
                 <div class="context-content">{{ msg.content || '（无内容）' }}</div>
+                <div v-if="msg.role === 'user' && msg.attachments?.length" class="context-attachments">
+                  <span v-for="att in msg.attachments" :key="att.id" class="file-tag">
+                    {{ att.filename }} ({{ (att.size / 1024).toFixed(1) }}KB)
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -552,10 +772,7 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.trace-feedback {
-  font-size: 16px;
-  flex-shrink: 0;
-}
+.trace-feedback { font-size: 16px; flex-shrink: 0; }
 
 .trace-info {
   display: flex;
@@ -614,10 +831,7 @@ onMounted(() => {
   color: var(--color-text);
 }
 
-.detail-actions {
-  display: flex;
-  gap: var(--spacing-2);
-}
+.detail-actions { display: flex; gap: var(--spacing-2); }
 
 .btn-action {
   background: var(--color-bg-hover);
@@ -651,146 +865,349 @@ onMounted(() => {
 
 .btn-export:hover { background: var(--color-primary-dark); }
 
-.detail-section {
-  margin-bottom: var(--spacing-5);
+/* QA Section */
+.qa-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-bottom: var(--spacing-4);
 }
 
-.detail-section h4 {
+.qa-item {
+  background: var(--color-bg-hover);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.qa-label {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-secondary);
-  margin: 0 0 var(--spacing-2);
+  margin-bottom: var(--spacing-2);
+}
+
+.qa-content {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.qa-content.question {
+  color: var(--color-text);
+  background: var(--color-primary-bg);
+  border-left: 3px solid var(--color-primary);
+  padding-left: var(--spacing-3);
+}
+
+.qa-content.answer {
+  color: var(--color-text-secondary);
+}
+
+/* Attachments */
+.attachments-section {
+  margin-bottom: var(--spacing-4);
+}
+
+.section-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-2);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-.question-text {
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
-  margin: 0;
-  line-height: var(--line-height-relaxed);
+.attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.file-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
   background: var(--color-primary-bg);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-radius: var(--radius-md);
-  border-left: 3px solid var(--color-primary);
+  border: 1px solid var(--color-primary-light);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-primary);
 }
 
-.answer-text {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  margin: 0;
-  line-height: var(--line-height-relaxed);
-  white-space: pre-wrap;
-  max-height: 160px;
-  overflow-y: auto;
-  background: var(--color-bg-hover);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-radius: var(--radius-md);
-}
-
-.detail-stats {
+/* Stats Grid */
+.stats-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--spacing-3);
   margin-bottom: var(--spacing-5);
 }
 
-.stat-item {
+.stat-card {
   background: var(--color-bg-hover);
-  padding: var(--spacing-3);
   border-radius: var(--radius-md);
-  text-align: center;
+  padding: var(--spacing-3);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
 }
 
-.stat-item .stat-label {
-  display: block;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  margin-bottom: 2px;
-}
+.stat-icon { font-size: 24px; }
 
-.stat-item .stat-value {
+.stat-info { flex: 1; }
+
+.stat-value {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text);
 }
 
-/* Steps Timeline */
-.steps-timeline {
+.stat-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* Timeline Section */
+.timeline-section {
+  margin-bottom: var(--spacing-4);
+}
+
+.timeline-container {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-4);
+  margin-bottom: var(--spacing-3);
+}
+
+.timeline-header {
+  position: relative;
+  height: 24px;
+  margin-bottom: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.timeline-marker {
+  position: absolute;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  align-items: center;
 }
 
-.step-node {
+.marker-line {
+  width: 1px;
+  height: 6px;
+  background: var(--color-border);
+}
+
+.marker-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.timeline-rows {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
   gap: var(--spacing-3);
 }
 
-.step-marker {
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+.row-label {
+  width: 100px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.step-index {
+  width: 18px;
+  height: 18px;
+  background: var(--color-bg-hover);
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
   flex-shrink: 0;
 }
 
-.step-num {
+.step-name {
   font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-inverse);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.step-card {
+.parallel-tag {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #f59e0b;
+  color: white;
+  flex-shrink: 0;
+}
+
+.row-bar-container {
   flex: 1;
-  background: var(--color-bg-card);
+  position: relative;
+  height: 28px;
+  background: var(--color-bg-hover);
+  border-radius: var(--radius-sm);
+}
+
+.timeline-bar {
+  position: absolute;
+  top: 4px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  overflow: hidden;
+  transition: width 0.3s ease;
+}
+
+.bar-duration {
+  font-size: 10px;
+  color: white;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+/* Steps Accordion */
+.steps-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--spacing-3) var(--spacing-4);
-  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
-.step-header {
+.step-detail {
+  background: var(--color-bg-card);
+}
+
+.step-detail:not(:last-child) {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.step-summary {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  margin-bottom: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  cursor: pointer;
+  list-style: none;
+  transition: background var(--transition-fast);
+}
+
+.step-summary::-webkit-details-marker { display: none; }
+.step-summary:hover { background: var(--color-bg-hover); }
+
+.step-summary .step-num {
+  width: 20px;
+  height: 20px;
+  background: var(--color-bg-hover);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
 }
 
 .step-type {
   font-size: var(--font-size-xs);
-  padding: 2px var(--spacing-2);
+  padding: 2px 8px;
   border-radius: var(--radius-sm);
   font-weight: var(--font-weight-medium);
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
+  flex-shrink: 0;
 }
 
-.step-type.tool_call { background: var(--color-warning-bg); color: var(--color-warning); }
+.step-tool {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-.step-tool { font-size: var(--font-size-xs); color: var(--color-text-secondary); font-weight: var(--font-weight-medium); }
+.step-dur {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
 
-.step-duration { margin-left: auto; font-size: var(--font-size-xs); color: var(--color-text-muted); }
+.expand-icon {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
 
-.step-io { margin-top: var(--spacing-2); }
+.step-detail[open] .expand-icon {
+  transform: rotate(90deg);
+}
 
-.io-label { font-size: var(--font-size-xs); color: var(--color-text-secondary); font-weight: var(--font-weight-semibold); }
+.step-body {
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
+}
 
-.step-io pre {
-  margin: var(--spacing-1) 0 0;
+.step-io {
+  margin-bottom: var(--spacing-2);
+}
+
+.step-io:last-of-type {
+  margin-bottom: 0;
+}
+
+.io-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-1);
+}
+
+.io-content {
+  margin: 0;
   padding: var(--spacing-2) var(--spacing-3);
   background: var(--color-bg-hover);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 80px;
+  max-height: 100px;
   overflow-y: auto;
-  border: 1px solid var(--color-border);
   line-height: var(--line-height-normal);
+}
+
+.step-meta {
+  display: flex;
+  gap: var(--spacing-4);
+  margin-top: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
 }
 
 /* Context Modal */
@@ -897,6 +1314,26 @@ onMounted(() => {
   line-height: var(--line-height-relaxed);
   max-height: 200px;
   overflow-y: auto;
+}
+
+.context-attachments {
+  padding: var(--spacing-2) var(--spacing-4);
+  background: rgba(255, 255, 255, 0.3);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.context-attachments .file-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  background: rgba(255, 255, 255, 0.5);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 /* Pagination */

@@ -3,6 +3,7 @@ import { request } from './request'
 export interface Trace {
   id: string
   session_id: string
+  message_index: number
   question: string
   final_answer: string | null
   total_time_ms: number
@@ -17,12 +18,15 @@ export interface TraceStep {
   tool_name: string | null
   input_prompt: string | null
   output_result: string | null
+  start_time_ms: number
   time_ms: number
+  duration_ms: number
   created_at: string
 }
 
 export interface TraceDetail extends Trace {
   steps: TraceStep[]
+  attachments_json: string | null
 }
 
 export interface TraceListResponse {

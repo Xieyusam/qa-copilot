@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.session import SessionLocal
 from app.models.user import User
+from app.services.observability.logger import get_trace_id
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
@@ -51,3 +52,8 @@ def require_admin(
             detail="Not enough permissions",
         )
     return current_user
+
+
+def get_current_trace_id() -> str:
+    """Get current trace_id from context."""
+    return get_trace_id()

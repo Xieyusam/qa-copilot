@@ -47,13 +47,13 @@ export const useDocumentStore = defineStore('documents', () => {
     }
   }
 
-  async function upload(file: File, kbCategory: string = 'default') {
+  async function upload(file: File, kbCategory: string = 'default', chunkingStrategy?: string) {
     uploading.value = true
     uploadProgress.value = 0
     try {
       await uploadDocument(file, kbCategory, (pct) => {
         uploadProgress.value = pct
-      })
+      }, chunkingStrategy)
       await fetchDocuments()
       addToast('success', `「${file.name}」上传成功，正在处理中`)
     } catch (e: any) {

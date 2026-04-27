@@ -4,19 +4,20 @@ Prefix is set in main.py (e.g. /api/documents).
 """
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, UploadFile, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.db.session import SessionLocal
 from app.models.document import Document
-from app.services.uploader import DocumentUploader
+from app.models.feishu_document import FeishuDocument
+from app.services.document.uploader import DocumentUploader
 from app.api.dependencies import require_admin, get_current_user
+from app.services.observability.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 _uploader: DocumentUploader | None = None
@@ -76,7 +77,12 @@ def _resolve_document_file_path(doc_id: str, filename: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 @router.post("/upload", status_code=200, dependencies=[Depends(require_admin)])
-async def upload_document(file: UploadFile, background_tasks: BackgroundTasks, kb_category: str = "default"):
+async def upload_document(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    kb_category: str = "default",
+    chunking_strategy: str | None = Form(default=None),
+):
     content = await file.read()
     filename = file.filename or "unknown"
 
@@ -90,7 +96,7 @@ async def upload_document(file: UploadFile, background_tasks: BackgroundTasks, k
     doc = await get_uploader().save_upload(content, filename, kb_category=kb_category)
 
     # 后台异步处理（解析 → 切分 → 向量化）
-    background_tasks.add_task(get_uploader().process_document, doc.id)
+    background_tasks.add_task(get_uploader().process_document, doc.id, chunking_strategy)
 
     return {"id": doc.id, "filename": doc.filename, "status": doc.status, "kb_category_id": doc.kb_category_id}
 
@@ -120,6 +126,7 @@ def list_documents(category_id: str | None = None):
                 "kb_category_id": d.kb_category_id,
                 "kb_category": d.kb_category_rel.name if d.kb_category_rel else d.kb_category_id,
                 "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+                "feishu_doc_id": d.feishu_doc_id,
             }
             for d in docs
         ]
@@ -166,6 +173,13 @@ async def delete_document(doc_id: str):
         doc = db.get(Document, doc_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Document not found")
+
+        # 如果是飞书文档，同时删除关联的 feishu_doc 记录
+        if doc.feishu_doc_id:
+            feishu_doc = db.get(FeishuDocument, doc.feishu_doc_id)
+            if feishu_doc:
+                db.delete(feishu_doc)
+                logger.info("Deleted associated feishu_doc %s", doc.feishu_doc_id)
     finally:
         db.close()
 

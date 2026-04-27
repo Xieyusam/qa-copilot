@@ -10,6 +10,16 @@ __pycache__/
 backend/.pytest_cache/
 backend/.hypothesis/
 
+# 运行时日志
+logs/
+backend/logs/
+
+# 代码覆盖率报告
+htmlcov/
+backend/htmlcov/
+.coverage
+backend/.coverage
+
 # 数据目录
 backend/data/
 data/
@@ -38,3 +48,4 @@ CLAUDE.local.md
 .claude/settings.local.json
 .claude/agent-memory-local/
 .claude/cache/
+.mcp.json

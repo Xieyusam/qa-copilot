@@ -2,11 +2,16 @@
 import { ref, watch, nextTick, computed } from 'vue'
 import { useChatStore } from '../stores/chat'
 import MessageBubble from './MessageBubble.vue'
+import { uploadAttachment, type Attachment } from '../api/attachments'
 
 const store = useChatStore()
 const question = ref('')
 const messagesEl = ref<HTMLElement | null>(null)
 const thinking = ref(false)
+const attachments = ref<Attachment[]>([])  // 已上传的附件
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const uploading = ref(false)
+const uploadError = ref('')
 
 // 锚点模式：以用户消息的滚动位置为锚点，上下切换
 const anchorActive = ref(false)
@@ -159,14 +164,77 @@ watch(() => store.streaming, (isStreaming) => {
   }
 })
 
+// 流式消息断点重试
+async function retryStream() {
+  store.clearStreamError()
+  await store.retryLastQuestion()
+}
+
 async function send() {
   const q = question.value.trim()
   if (!q || store.streaming) return
+  if (uploading.value) return
+
   question.value = ''
   // 发送后重置锚点
   anchorActive.value = false
   anchorUserIndex.value = -1
-  await store.sendQuestion(q)
+
+  // 发送附件
+  const atts = attachments.value
+  attachments.value = []
+  await store.sendQuestion(q, atts)
+}
+
+function onAttachClick() {
+  fileInputRef.value?.click()
+}
+
+async function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (!input.files || input.files.length === 0) return
+
+  // 检查数量限制
+  const currentCount = attachments.value.length
+  const newCount = input.files.length
+  if (currentCount + newCount > 5) {
+    uploadError.value = '最多只能上传5个附件'
+    input.value = ''
+    return
+  }
+
+  // 检查大小限制
+  for (const file of input.files) {
+    if (file.size > 10 * 1024 * 1024) {
+      uploadError.value = '单个文件不能超过10MB'
+      input.value = ''
+      return
+    }
+  }
+
+  uploadError.value = ''
+  uploading.value = true
+
+  // 上传每个文件
+  const newAttachments: Attachment[] = []
+  for (let i = 0; i < input.files.length; i++) {
+    const file = input.files[i]
+    try {
+      const att = await uploadAttachment(file)
+      newAttachments.push(att)
+    } catch (err) {
+      console.error('Upload failed:', err)
+      uploadError.value = `上传失败: ${file.name}`
+    }
+  }
+
+  attachments.value = [...attachments.value, ...newAttachments]
+  uploading.value = false
+  input.value = ''
+}
+
+function removeAttachment(id: string) {
+  attachments.value = attachments.value.filter(a => a.id !== id)
 }
 
 async function sendSuggested(query: string) {
@@ -233,7 +301,7 @@ function onKeydown(e: KeyboardEvent) {
         <span class="dot"></span>
         <span class="dot"></span>
         <span class="dot"></span>
-        <span class="thinking-text">正在思考...</span>
+        <span class="thinking-text">{{ store.currentStatus || '正在思考...' }}</span>
       </div>
     </div>
 
@@ -245,21 +313,68 @@ function onKeydown(e: KeyboardEvent) {
       >
         <span class="stop-icon">■</span> 停止生成
       </button>
-      <textarea
-        v-model="question"
-        class="input-box"
-        placeholder="输入问题，按 Enter 发送（Shift+Enter 换行）"
-        rows="2"
-        :disabled="store.streaming"
-        @keydown="onKeydown"
-      ></textarea>
-      <button
-        class="btn-send"
-        :disabled="store.streaming || !question.trim()"
-        @click="send"
-      >
-        发送
-      </button>
+      <!-- 流式中断错误提示 + 重试按钮 -->
+      <div v-if="store.streamError && !store.streaming" class="stream-error">
+        <span class="stream-error-msg">{{ store.streamError }}</span>
+        <button
+          v-if="store.streamPartial"
+          class="btn-retry"
+          @click="retryStream"
+        >
+          继续生成
+        </button>
+        <button
+          class="btn-dismiss"
+          @click="store.clearStreamError()"
+        >
+          ×
+        </button>
+      </div>
+      <!-- 上传错误提示 -->
+      <div v-if="uploadError" class="upload-error" @click="uploadError = ''">
+        {{ uploadError }}
+      </div>
+      <!-- 附件预览标签 -->
+      <div v-if="attachments.length > 0" class="attached-files">
+        <span v-for="att in attachments" :key="att.id" class="file-tag">
+          📎 {{ att.filename }} ({{ (att.size / 1024).toFixed(1) }}KB)
+          <button class="file-remove" @click="removeAttachment(att.id)">×</button>
+        </span>
+      </div>
+      <!-- 上传中指示器 -->
+      <div v-if="uploading" class="upload-indicator">
+        上传中...
+      </div>
+      <div class="input-row">
+        <button class="btn-attach" title="添加附件" @click="onAttachClick">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+          </svg>
+        </button>
+        <input
+          ref="fileInputRef"
+          type="file"
+          class="hidden-file-input"
+          accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
+          multiple
+          @change="onFileChange"
+        >
+        <textarea
+          v-model="question"
+          class="input-box"
+          placeholder="输入问题，按 Enter 发送（Shift+Enter 换行）"
+          rows="2"
+          :disabled="store.streaming"
+          @keydown="onKeydown"
+        ></textarea>
+        <button
+          class="btn-send"
+          :disabled="store.streaming || !question.trim()"
+          @click="send"
+        >
+          发送
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -448,12 +563,76 @@ function onKeydown(e: KeyboardEvent) {
 
 .input-area {
   display: flex;
+  flex-direction: column;
   gap: var(--spacing-2);
   padding: var(--spacing-3) var(--spacing-4);
   border-top: 1px solid var(--color-border);
   background: var(--color-bg);
   flex-shrink: 0;
   position: relative;
+}
+
+.input-row {
+  display: flex;
+  gap: var(--spacing-2);
+  align-items: flex-end;
+  position: relative;
+}
+
+.attached-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) 0;
+}
+
+.file-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  background: var(--color-primary-bg);
+  border: 1px solid var(--color-primary-light);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-primary);
+}
+
+.file-remove {
+  background: transparent;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  margin-left: var(--spacing-1);
+}
+
+.file-remove:hover {
+  color: var(--color-error);
+}
+
+.btn-attach {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: var(--spacing-1);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all var(--transition-fast);
+  z-index: 1;
+}
+
+.btn-attach:hover {
+  color: var(--color-primary);
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 .btn-stop {
@@ -486,12 +665,57 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--color-error);
 }
 
+.stream-error {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-error-bg, #fef2f2);
+  border: 1px solid var(--color-error, #ef4444);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-error, #ef4444);
+  margin-bottom: var(--spacing-2);
+}
+
+.stream-error-msg {
+  flex: 1;
+}
+
+.btn-retry {
+  padding: var(--spacing-1) var(--spacing-3);
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-retry:hover {
+  background: var(--color-primary-dark);
+}
+
+.btn-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 var(--spacing-1);
+}
+
+.btn-dismiss:hover {
+  color: var(--color-text);
+}
+
 .input-box {
   flex: 1;
   resize: none;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-2) 70px var(--spacing-2) 36px; /* 左侧给上传按钮留空间，右侧给发送按钮留空间 */
   font-size: var(--font-size-sm);
   font-family: var(--font-family);
   line-height: var(--line-height-normal);
@@ -520,7 +744,10 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .btn-send {
-  padding: 0 var(--spacing-5);
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: var(--spacing-1) var(--spacing-3);
   background: var(--color-primary);
   color: var(--color-text-inverse);
   border: none;
@@ -528,9 +755,9 @@ function onKeydown(e: KeyboardEvent) {
   cursor: pointer;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  align-self: flex-end;
-  height: 38px;
+  height: 28px;
   transition: all var(--transition-fast);
+  z-index: 1;
 }
 
 .btn-send:hover:not(:disabled) {

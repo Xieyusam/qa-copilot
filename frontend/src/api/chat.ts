@@ -21,6 +21,8 @@ function toMessage(raw: Record<string, unknown>): Message {
     sources: raw.sources
       ? (raw.sources as Record<string, unknown>[]).map(toSourceRef)
       : undefined,
+    attachments: raw.attachments as Message['attachments'],
+    feedback_type: raw.feedback_type as Message['feedback_type'],
   }
 }
 
@@ -58,13 +60,26 @@ export async function sendMessage(
   onToken: (token: string) => void,
   onSources: (sources: SourceRef[]) => void,
   signal?: AbortSignal,
+  attachments?: { id: string; filename: string; size: number }[],
+  onStatus?: (status: string) => void,
 ): Promise<void> {
-  const res = await request(`${API_BASE}/chat/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
-    signal,
-  })
+  let res: Response
+
+  if (attachments && attachments.length > 0) {
+    res = await request(`${API_BASE}/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, attachments }),
+      signal,
+    })
+  } else {
+    res = await request(`${API_BASE}/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+      signal,
+    })
+  }
 
   if (!res.ok) throw new Error(`Failed to send message: ${res.status}`)
   if (!res.body) throw new Error('Response body is empty')
@@ -85,12 +100,14 @@ export async function sendMessage(
           if (payload === '[DONE]') break
 
           try {
-            const event = JSON.parse(payload) as TokenEvent | SourcesEvent
+            const event = JSON.parse(payload) as SSEEvent
             if (event.type === 'token') {
               onToken(event.content)
             } else if (event.type === 'sources') {
               const mappedSources = (event.data as unknown as Record<string, unknown>[]).map(toSourceRef)
               onSources(mappedSources)
+            } else if (event.type === 'status' && onStatus) {
+              onStatus(event.content)
             }
           } catch {
             // Ignore malformed SSE lines
@@ -110,12 +127,14 @@ export async function sendMessage(
       if (payload === '[DONE]') return
 
       try {
-        const event = JSON.parse(payload) as TokenEvent | SourcesEvent
+        const event = JSON.parse(payload) as SSEEvent
         if (event.type === 'token') {
           onToken(event.content)
         } else if (event.type === 'sources') {
           const mappedSources = (event.data as unknown as Record<string, unknown>[]).map(toSourceRef)
           onSources(mappedSources)
+        } else if (event.type === 'status' && onStatus) {
+          onStatus(event.content)
         }
       } catch {
         // Ignore malformed SSE lines

@@ -5,6 +5,7 @@ import KnowledgeSourcesView from '../views/KnowledgeSourcesView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import ObservabilityView from '../views/ObservabilityView.vue'
+import LogsView from '../views/LogsView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -14,6 +15,7 @@ const router = createRouter({
     { path: '/', component: ChatView },
     { path: '/docs', component: KnowledgeSourcesView, meta: { requiresAdmin: true } },
     { path: '/admin/observability', component: ObservabilityView, meta: { requiresAdmin: true } },
+    { path: '/admin/logs', component: LogsView, meta: { requiresAuth: true, requiresAdmin: true } },
   ],
 })
 
